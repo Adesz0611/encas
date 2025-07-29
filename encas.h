@@ -295,6 +295,9 @@ typedef struct Encas_MeshArray {
     u32 len;
     u32 cap;
 } Encas_MeshArray;
+
+#include "hash.h"
+
 //------------------------------------
 
 static inline u32 _encas_hash(s32 key) {
@@ -364,6 +367,9 @@ ENCAS_API void Encas_DeleteMeshArray(Encas_MeshArray *arr);
 ENCAS_API const char *Encas_ElemToCstr(Encas_Elem_Type elem);
 ENCAS_API Encas_MeshArray *Encas_ReadGeometry(Encas_MeshInfo *mesh_info, char *filename);
 ENCAS_API Encas_MeshArray *Encas_LoadGeometry(Encas_Case *encase, u32 time_value_idx);
+ENCAS_API u32 Encas_GetCellTrianglesCount(Encas_Elem_Type cell_type);
+ENCAS_API void Encas_TriangulateTetra4s(u32 *elem_vert_map_array, u32 num_cells, u32 *faces, u64 *faces_offset, u64 vert_offset);
+ENCAS_API void Encas_LoadGeometryShell(Encas_Case *encase, u32 time_value_idx, float **vbo_out, u32 *vbo_size, u32 **ebo_out, u32 *ebo_size);
 ENCAS_API void Encas_DeleteFloatArrParts(float **data, u32 num_of_parts);
 ENCAS_API float **Encas_ReadVariableDataPerElement(Encas_Case *encase, Encas_MeshInfo *mesh_info, char *filename, u32 num_of_data);
 ENCAS_API float *Encas_ReadVariableDataPerElementPart(Encas_Case *encase, Encas_MeshInfo *mesh_info, char *filename, u32 part_idx, u32 num_of_data);
@@ -2630,6 +2636,241 @@ ENCAS_API Encas_MeshArray *Encas_LoadGeometry(Encas_Case *encase, u32 time_value
 
 error:
     return NULL;
+}
+
+ENCAS_API u32 Encas_GetCellTrianglesCount(Encas_Elem_Type cell_type) {
+    switch (cell_type) {
+        case ENCAS_ELEM_TRIA3:
+            return 1;
+        case ENCAS_ELEM_TRIA6:
+            return 4;
+        case ENCAS_ELEM_QUAD4:
+            return 2;
+        case ENCAS_ELEM_QUAD8:
+            return 6;
+        case ENCAS_ELEM_TETRA4:
+            return 4;
+        case ENCAS_ELEM_TETRA10:
+            return 16;
+        case ENCAS_ELEM_PYRAMID5:
+            return 6;
+        case ENCAS_ELEM_PYRAMID13:
+            return 22;
+        case ENCAS_ELEM_PENTA6:
+            return 8;
+        case ENCAS_ELEM_PENTA15:
+            return 26;
+        case ENCAS_ELEM_HEXA8:
+            return 12;
+        case ENCAS_ELEM_HEXA20:
+            return 36;
+
+        case ENCAS_ELEM_NSIDED:
+        case ENCAS_ELEM_NFACED:
+        case ENCAS_ELEM_UNKNOWN:
+        default:
+            return 0;
+    }
+}
+
+ENCAS_API void Encas_TriangulateTetra4s(u32 *elem_vert_map_array, u32 num_cells, u32 *faces, u64 *faces_offset, u64 vert_offset) {
+    u64 local_faces_offset = *faces_offset;
+
+    for (u32 cell_idx = 0; cell_idx < num_cells; ++cell_idx) {
+        faces[local_faces_offset + 0] = elem_vert_map_array[cell_idx * 4 + 0] + vert_offset;
+        faces[local_faces_offset + 1] = elem_vert_map_array[cell_idx * 4 + 1] + vert_offset;
+        faces[local_faces_offset + 2] = elem_vert_map_array[cell_idx * 4 + 2] + vert_offset;
+
+        local_faces_offset += 3;
+
+        faces[local_faces_offset + 0] = elem_vert_map_array[cell_idx * 4 + 0] + vert_offset;
+        faces[local_faces_offset + 1] = elem_vert_map_array[cell_idx * 4 + 1] + vert_offset;
+        faces[local_faces_offset + 2] = elem_vert_map_array[cell_idx * 4 + 3] + vert_offset;
+
+        local_faces_offset += 3;
+
+        faces[local_faces_offset + 0] = elem_vert_map_array[cell_idx * 4 + 1] + vert_offset;
+        faces[local_faces_offset + 1] = elem_vert_map_array[cell_idx * 4 + 2] + vert_offset;
+        faces[local_faces_offset + 2] = elem_vert_map_array[cell_idx * 4 + 3] + vert_offset;
+
+        local_faces_offset += 3;
+
+        faces[local_faces_offset + 0] = elem_vert_map_array[cell_idx * 4 + 0] + vert_offset;
+        faces[local_faces_offset + 1] = elem_vert_map_array[cell_idx * 4 + 2] + vert_offset;
+        faces[local_faces_offset + 2] = elem_vert_map_array[cell_idx * 4 + 3] + vert_offset;
+
+        local_faces_offset += 3;
+    }
+
+    *faces_offset = local_faces_offset;
+}
+
+force_inline void sort3(u32 *a, u32 *b, u32 *c) {
+    if (*a > *b) { u32 t = *a; *a = *b; *b = t; }
+    if (*b > *c) { u32 t = *b; *b = *c; *c = t; }
+    if (*a > *b) { u32 t = *a; *a = *b; *b = t; }
+}
+
+force_inline u32 next_power_of_two(u32 x) {
+    if (x == 0) return 1;
+    --x;
+    x |= x >> 1;
+    x |= x >> 2;
+    x |= x >> 4;
+    x |= x >> 8;
+    x |= x >> 16;
+    return x + 1;
+}
+
+
+ENCAS_API void Encas_LoadGeometryShell(Encas_Case *encase, u32 time_value_idx, float **vbo_out, u32 *vbo_size, u32 **ebo_out, u32 *ebo_size) {
+    u32 *faces; // triangles
+    u64 num_faces = 0;
+
+    Encas_MeshArray *mesh = Encas_LoadGeometry(encase, time_value_idx);
+    Encas_Vertex *vertices;
+
+    u64 vertices_size = 0;
+    for (u32 part_idx = 0; part_idx < mesh->len; ++part_idx)
+        vertices_size += mesh->elems[part_idx]->vert_array_size;
+
+    vertices = (Encas_Vertex *)ENCAS_MALLOC(vertices_size * sizeof(Encas_Vertex));
+
+
+    u64 vert_offset = 0;
+    for (u32 part_idx = 0; part_idx < mesh->len; ++part_idx) {
+        Encas_Mesh *mesh_part = mesh->elems[part_idx];
+
+        for (u32 elem_idx = 0; elem_idx < mesh_part->elem_array_size; ++elem_idx) {
+            Encas_Elem_Type type = mesh_part->elem_array[elem_idx].type;
+            u32 num_of_cells = mesh_part->elem_array[elem_idx].elem_vert_map_size / (u32)mesh_part->elem_array[elem_idx].elem_size;
+
+            num_faces += num_of_cells * Encas_GetCellTrianglesCount(type);
+        }
+
+        for (u64 vert_idx = 0; vert_idx < mesh_part->vert_array_size; ++vert_idx) {
+            Encas_Vertex *vs = vertices + vert_offset + vert_idx;
+
+            vs->x = mesh_part->vert_array.x[vert_idx];
+            vs->y = mesh_part->vert_array.y[vert_idx];
+            vs->z = mesh_part->vert_array.z[vert_idx];
+        }
+
+        vert_offset += mesh_part->vert_array_size;
+    }
+
+    faces = (u32 *)ENCAS_MALLOC(3 * num_faces * sizeof(u32));
+
+    // Fill the face array
+    vert_offset = 0;
+
+    u64 face_offset = 0;
+    for (u32 part_idx = 0; part_idx < mesh->len; ++part_idx) {
+        Encas_Mesh *mesh_part = mesh->elems[part_idx];
+
+        for (u32 elem_idx = 0; elem_idx < mesh_part->elem_array_size; ++elem_idx) {
+            Encas_Elem_Type type = mesh_part->elem_array[elem_idx].type;
+            u32 num_of_cells = mesh_part->elem_array[elem_idx].elem_vert_map_size / (u32)mesh_part->elem_array[elem_idx].elem_size;
+
+            switch (type) {
+                case ENCAS_ELEM_TETRA4:
+                    Encas_TriangulateTetra4s(mesh_part->elem_vert_map_array + mesh_part->elem_array[elem_idx].elem_vert_map_entry,
+                                             num_of_cells, faces, &face_offset, vert_offset);
+                    break;
+                default:
+                    break;
+            }
+        }
+
+
+        vert_offset += mesh_part->vert_array_size;
+    }
+
+    Encas_FaceKeyMap m;
+    Encas_CreateFaceKeyMap(&m, next_power_of_two(2 * num_faces));
+
+    for (u64 tria_idx = 0; tria_idx < num_faces; ++tria_idx) {
+        Encas_FaceKey f;
+        f.v[0] = faces[3 * tria_idx + 0];
+        f.v[1] = faces[3 * tria_idx + 1];
+        f.v[2] = faces[3 * tria_idx + 2];
+
+        sort3(f.v, f.v + 1, f.v + 2);
+
+        u8 num_tria;
+        if (Encas_GetFaceKeyMap(&m, f, &num_tria))
+            Encas_SetFaceKeyMap(&m, f, num_tria + 1);
+        else
+            Encas_SetFaceKeyMap(&m, f, 1);
+    }
+
+    u8 *used_vertices = ENCAS_MALLOC(vertices_size * sizeof(u8));
+    memset(used_vertices, 0, vertices_size * sizeof(u8));
+
+    u32 new_triangle_count = 0;
+
+    for (u32 i = 0; i < m.cap; ++i) {
+        if (m.values[i] == 1) {
+            Encas_FaceKey face = m.keys[i];
+            used_vertices[face.v[0]] = 1;
+            used_vertices[face.v[1]] = 1;
+            used_vertices[face.v[2]] = 1;
+            ++new_triangle_count;
+        }
+    }
+
+    u32 *remap = ENCAS_MALLOC(sizeof(u32) * vertices_size);
+    u32 new_vertex_count = 0;
+
+    for (u32 i = 0; i < vertices_size; ++i) {
+        if (used_vertices[i]) {
+            remap[i] = new_vertex_count++;
+        }
+    }
+
+    float *vbo = ENCAS_MALLOC(3 * new_vertex_count * sizeof(float));
+    for (u32 i = 0; i < vertices_size; ++i) {
+        if (used_vertices[i]) {
+            vbo[3 * remap[i] + 0] = vertices[i].x;
+            vbo[3 * remap[i] + 1] = vertices[i].y;
+            vbo[3 * remap[i] + 2] = vertices[i].z;
+        }
+    }
+
+    u32 *visible_triangle_indices = ENCAS_MALLOC(sizeof(u32) * 3 * new_triangle_count);
+    u32 j = 0;
+
+    for (u32 i = 0; i < m.cap; ++i) {
+        if (m.values[i] == 1) {
+            Encas_FaceKey face = m.keys[i];
+            visible_triangle_indices[j++] = remap[face.v[0]];
+            visible_triangle_indices[j++] = remap[face.v[1]];
+            visible_triangle_indices[j++] = remap[face.v[2]];
+        }
+    }
+
+    printf("new_vertex_count = %d\n", new_vertex_count);
+    printf("new_triangle_count = %d\n", new_triangle_count);
+
+    FILE *f = fopen("ki.obj", "w");
+    for (u32 vert_idx = 0; vert_idx < new_vertex_count; ++vert_idx)
+        fprintf(f, "v %f %f %f\n", vbo[vert_idx * 3 + 0], vbo[vert_idx * 3 + 1], vbo[vert_idx * 3 + 2]);
+    for (u32 tria_idx = 0; tria_idx < new_triangle_count; ++tria_idx)
+        fprintf(f, "f %d %d %d\n", visible_triangle_indices[tria_idx * 3 + 0] + 1, visible_triangle_indices[tria_idx * 3 + 1] + 1, visible_triangle_indices[tria_idx * 3 + 2] + 1);
+    fclose(f);
+
+    *vbo_out  = vbo;
+    *vbo_size = new_vertex_count;
+
+    *ebo_out  = visible_triangle_indices;
+    *ebo_size = new_triangle_count * 3;
+
+    ENCAS_FREE(used_vertices);
+    ENCAS_FREE(remap);
+
+    Encas_DeleteFaceKeyMap(&m);
+    ENCAS_FREE(faces);
+    Encas_DeleteMeshArray(mesh);
 }
 
 ENCAS_API void Encas_DeleteFloatArrParts(float **data, u32 num_of_parts) {
