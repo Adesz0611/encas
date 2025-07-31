@@ -75,6 +75,20 @@ typedef ENCAS_LOG_CALLBACK(encas_log_callback);
 encas_log_callback *global_logger = NULL;
 #endif
 
+
+#define LOAD_FACTOR 0.75f
+
+typedef struct Encas_FaceKey {
+    u32 v[3];
+} Encas_FaceKey;
+
+typedef struct Encas_FaceKeyMap {
+    Encas_FaceKey *keys;
+    u8 *values;
+    u32 cap;
+    u32 len;
+} Encas_FaceKeyMap;
+
 #define ENCAS_TABLE_SIZE 1024
 
 typedef struct Encas_HashEntry {
@@ -122,6 +136,29 @@ typedef enum {
     ENCAS_MATERIAL,
 } Encas_SectionType;
 
+typedef enum Encas_Elem_Type
+{
+    ENCAS_ELEM_POINT,
+    ENCAS_ELEM_BAR2,
+    ENCAS_ELEM_BAR3,
+    ENCAS_ELEM_TRIA3,
+    ENCAS_ELEM_TRIA6,
+    ENCAS_ELEM_QUAD4,
+    ENCAS_ELEM_QUAD8,
+    ENCAS_ELEM_TETRA4,
+    ENCAS_ELEM_TETRA10,
+    ENCAS_ELEM_PYRAMID5,
+    ENCAS_ELEM_PYRAMID13,
+    ENCAS_ELEM_PENTA6,
+    ENCAS_ELEM_PENTA15,
+    ENCAS_ELEM_HEXA8,
+    ENCAS_ELEM_HEXA20,
+    ENCAS_ELEM_NSIDED,
+    ENCAS_ELEM_NFACED,
+    ENCAS_ELEM_UNKNOWN,
+} Encas_Elem_Type;
+
+
 // Encas String Array type
 // -----------------
 #define MAX_STRARRAY_ELEMS 16
@@ -139,6 +176,7 @@ typedef struct Encas_HashTableArray {
 
 typedef struct Encas_MeshInfoPart {
     s32 *elem_sizes;
+    u32 *elem_offsets;
     s32 len;
     u64 elem_vert_map_array_size;
     s32 num_of_coords;
@@ -236,28 +274,6 @@ typedef enum {
     ENCAS_MODE_UNKNOWN,
 } Encas_Mode;
 
-typedef enum Encas_Elem_Type
-{
-    ENCAS_ELEM_POINT,
-    ENCAS_ELEM_BAR2,
-    ENCAS_ELEM_BAR3,
-    ENCAS_ELEM_TRIA3,
-    ENCAS_ELEM_TRIA6,
-    ENCAS_ELEM_QUAD4,
-    ENCAS_ELEM_QUAD8,
-    ENCAS_ELEM_TETRA4,
-    ENCAS_ELEM_TETRA10,
-    ENCAS_ELEM_PYRAMID5,
-    ENCAS_ELEM_PYRAMID13,
-    ENCAS_ELEM_PENTA6,
-    ENCAS_ELEM_PENTA15,
-    ENCAS_ELEM_HEXA8,
-    ENCAS_ELEM_HEXA20,
-    ENCAS_ELEM_NSIDED,
-    ENCAS_ELEM_NFACED,
-    ENCAS_ELEM_UNKNOWN,
-} Encas_Elem_Type;
-
 typedef struct Encas_Vertex
 {
     float x, y, z;
@@ -296,7 +312,17 @@ typedef struct Encas_MeshArray {
     u32 cap;
 } Encas_MeshArray;
 
-#include "hash.h"
+typedef struct Encas_FlatMesh {
+    Encas_Vertex *vertices;
+    u64 vertices_size;
+
+    u64 *elem_vert_map;
+    u64 elem_vert_map_size;
+
+    u32 num_variables; // Number of variables
+    float **data; // All variables converted to node values
+    u32 *data_sizes; // Size of each variable data in bytes
+} Encas_FlatMesh;
 
 //------------------------------------
 
@@ -368,8 +394,10 @@ ENCAS_API const char *Encas_ElemToCstr(Encas_Elem_Type elem);
 ENCAS_API Encas_MeshArray *Encas_ReadGeometry(Encas_MeshInfo *mesh_info, char *filename);
 ENCAS_API Encas_MeshArray *Encas_LoadGeometry(Encas_Case *encase, u32 time_value_idx);
 ENCAS_API u32 Encas_GetCellTrianglesCount(Encas_Elem_Type cell_type);
+ENCAS_API void Encas_TriangulateTria3s(u32 *elem_vert_map_array, u32 num_cells, u32 *faces, u64 *faces_offset, u64 vert_offset);
 ENCAS_API void Encas_TriangulateTetra4s(u32 *elem_vert_map_array, u32 num_cells, u32 *faces, u64 *faces_offset, u64 vert_offset);
-ENCAS_API void Encas_LoadGeometryShell(Encas_Case *encase, u32 time_value_idx, float **vbo_out, u32 *vbo_size, u32 **ebo_out, u32 *ebo_size);
+ENCAS_API void Encas_LoadGeometryShell(Encas_Case *encase, Encas_MeshArray *mesh, float **vbo_out, u32 *vbo_size, u32 **vbo_orig_idx_out, u32 **ebo_out, u32 *ebo_size);
+ENCAS_API bool Encas_LoadVariableOnShell(Encas_Case *encase, Encas_MeshArray *mesh, char *variable_name, u32 time_value_idx, const u32 *vbo_orig_idx, u32 vbo_size, float **var_vbo_out);
 ENCAS_API void Encas_DeleteFloatArrParts(float **data, u32 num_of_parts);
 ENCAS_API float **Encas_ReadVariableDataPerElement(Encas_Case *encase, Encas_MeshInfo *mesh_info, char *filename, u32 num_of_data);
 ENCAS_API float *Encas_ReadVariableDataPerElementPart(Encas_Case *encase, Encas_MeshInfo *mesh_info, char *filename, u32 part_idx, u32 num_of_data);
@@ -377,6 +405,15 @@ ENCAS_API float **Encas_ReadVariableDataPerNode(Encas_Case *encase, Encas_MeshIn
 ENCAS_API float *Encas_ReadVariableDataPerNodePart(Encas_Case *encase, Encas_MeshInfo *mesh_info, char *filename, u32 part_idx, u32 num_of_data);
 ENCAS_API float *Encas_LoadVariableDataPart(Encas_Case *encase, u32 time_value_idx, u32 variable_idx, u32 part_idx);
 ENCAS_API float **Encas_LoadVariableData(Encas_Case *encase, u32 time_value_idx, u32 variable_idx);
+ENCAS_API void Encas_MeshArray_To_FlatMesh(Encas_Case *encas, Encas_MeshArray *mesh, Encas_FlatMesh *flat, u32 time_idx, u32 variable_idx);
+ENCAS_API void Encas_DeleteFlatMesh(Encas_FlatMesh *flat);
+ENCAS_API bool Encas_EqualFaceKey(const Encas_FaceKey *a, const Encas_FaceKey *b);
+ENCAS_API void Encas_CreateFaceKeyMap(Encas_FaceKeyMap *map, u32 cap);
+ENCAS_API void Encas_DeleteFaceKeyMap(Encas_FaceKeyMap *map);
+ENCAS_API void Encas_RehashFaceKeyMap(Encas_FaceKeyMap *map, u32 new_cap);
+ENCAS_API void Encas_SetFaceKeyMap(Encas_FaceKeyMap *map, Encas_FaceKey key, u8 value);
+ENCAS_API bool Encas_GetFaceKeyMap(Encas_FaceKeyMap *map, Encas_FaceKey key, u8 *out_value);
+ENCAS_API void Encas_RehashFaceKeyMap(Encas_FaceKeyMap *map, u32 new_cap);
 
 #ifdef ENCAS_IMPLEMENTATION
 ENCAS_API void Encas_Init(encas_log_callback *logger) {
@@ -401,6 +438,7 @@ ENCAS_API void Encas_Log(Encas_Log_Level level, const char *format, ...) {
 ENCAS_API void Encas_DeleteMeshInfo(Encas_MeshInfo *info) {
     for (u32 i = 0; i < info->len; ++i) {
         ENCAS_FREE(info->parts[i].elem_sizes);
+        ENCAS_FREE(info->parts[i].elem_offsets);
     }
 
     ENCAS_FREE(info->parts);
@@ -1496,6 +1534,7 @@ ENCAS_API bool Encas_ParseMeshInfo(Encas_MeshInfo *info, char *filename) {
 
         info->parts[part_idx].len = num_of_elemtypes;
         info->parts[part_idx].elem_sizes = (s32 *)ENCAS_MALLOC(num_of_elemtypes * sizeof(s32));
+        info->parts[part_idx].elem_offsets = (u32 *)ENCAS_MALLOC(num_of_elemtypes * sizeof(u32));
         if (info->parts[part_idx].elem_sizes == NULL) {
             Encas_Log(ENCAS_LOG_LEVEL_ERROR, "Couldn't allocate memory!");
             Encas_FreeFile(f);
@@ -1541,6 +1580,7 @@ ENCAS_API bool Encas_ParseMeshInfo(Encas_MeshInfo *info, char *filename) {
                 }
 
                 info->parts[part_idx].elem_sizes[elem_idx] = num_of_elements;
+                info->parts[part_idx].elem_offsets[elem_idx] = (elem_idx == 0) ? 0 : info->parts[part_idx].elem_offsets[elem_idx - 1] + num_of_elements;
                 Encas_FileAdvace(f, num_of_elements * elem_vert_count * sizeof(s32));
             }
 
@@ -2559,10 +2599,8 @@ ENCAS_API Encas_MeshArray *Encas_ReadGeometry(Encas_MeshInfo *mesh_info, char *f
 }
 
 ENCAS_API Encas_MeshArray *Encas_LoadGeometry(Encas_Case *encase, u32 time_value_idx) {
-    if (time_value_idx > encase->geometry->model->num_of_files - 1) {
-        Encas_Log(ENCAS_LOG_LEVEL_ERROR, "Given time_idx is out of range!\n");
-        return NULL;
-    }
+    if (time_value_idx > encase->geometry->model->num_of_files - 1)
+        time_value_idx = 0;
 
     Encas_GeometryElem *gelem = encase->geometry->model;
     Encas_MeshInfo *mesh_info = NULL;
@@ -2673,6 +2711,20 @@ ENCAS_API u32 Encas_GetCellTrianglesCount(Encas_Elem_Type cell_type) {
     }
 }
 
+ENCAS_API void Encas_TriangulateTria3s(u32 *elem_vert_map_array, u32 num_cells, u32 *faces, u64 *faces_offset, u64 vert_offset) {
+    u64 local_faces_offset = *faces_offset;
+
+    for (u32 cell_idx = 0; cell_idx < num_cells; ++cell_idx) {
+        faces[local_faces_offset + 0] = elem_vert_map_array[cell_idx * 3 + 0] + vert_offset;
+        faces[local_faces_offset + 1] = elem_vert_map_array[cell_idx * 3 + 1] + vert_offset;
+        faces[local_faces_offset + 2] = elem_vert_map_array[cell_idx * 3 + 2] + vert_offset;
+
+        local_faces_offset += 3;
+    }
+
+    *faces_offset = local_faces_offset;
+}
+
 ENCAS_API void Encas_TriangulateTetra4s(u32 *elem_vert_map_array, u32 num_cells, u32 *faces, u64 *faces_offset, u64 vert_offset) {
     u64 local_faces_offset = *faces_offset;
 
@@ -2723,11 +2775,10 @@ force_inline u32 next_power_of_two(u32 x) {
 }
 
 
-ENCAS_API void Encas_LoadGeometryShell(Encas_Case *encase, u32 time_value_idx, float **vbo_out, u32 *vbo_size, u32 **ebo_out, u32 *ebo_size) {
+ENCAS_API void Encas_LoadGeometryShell(Encas_Case *encase, Encas_MeshArray *mesh, float **vbo_out, u32 *vbo_size, u32 **vbo_orig_idx_out, u32 **ebo_out, u32 *ebo_size) {
     u32 *faces; // triangles
     u64 num_faces = 0;
 
-    Encas_MeshArray *mesh = Encas_LoadGeometry(encase, time_value_idx);
     Encas_Vertex *vertices;
 
     u64 vertices_size = 0;
@@ -2773,6 +2824,10 @@ ENCAS_API void Encas_LoadGeometryShell(Encas_Case *encase, u32 time_value_idx, f
             u32 num_of_cells = mesh_part->elem_array[elem_idx].elem_vert_map_size / (u32)mesh_part->elem_array[elem_idx].elem_size;
 
             switch (type) {
+                case ENCAS_ELEM_TRIA3:
+                    Encas_TriangulateTria3s(mesh_part->elem_vert_map_array + mesh_part->elem_array[elem_idx].elem_vert_map_entry,
+                                             num_of_cells, faces, &face_offset, vert_offset);
+                    break;
                 case ENCAS_ELEM_TETRA4:
                     Encas_TriangulateTetra4s(mesh_part->elem_vert_map_array + mesh_part->elem_array[elem_idx].elem_vert_map_entry,
                                              num_of_cells, faces, &face_offset, vert_offset);
@@ -2823,9 +2878,15 @@ ENCAS_API void Encas_LoadGeometryShell(Encas_Case *encase, u32 time_value_idx, f
     u32 new_vertex_count = 0;
 
     for (u32 i = 0; i < vertices_size; ++i) {
-        if (used_vertices[i]) {
+        if (used_vertices[i])
             remap[i] = new_vertex_count++;
-        }
+    }
+
+    u32 *vbo_orig_idx = (u32 *)ENCAS_MALLOC(new_vertex_count * sizeof(u32));
+    new_vertex_count = 0;
+    for (u32 i = 0; i < vertices_size; ++i) {
+        if (used_vertices[i])
+            vbo_orig_idx[new_vertex_count++] = i;
     }
 
     float *vbo = ENCAS_MALLOC(3 * new_vertex_count * sizeof(float));
@@ -2862,6 +2923,8 @@ ENCAS_API void Encas_LoadGeometryShell(Encas_Case *encase, u32 time_value_idx, f
     *vbo_out  = vbo;
     *vbo_size = new_vertex_count;
 
+    *vbo_orig_idx_out = vbo_orig_idx;
+
     *ebo_out  = visible_triangle_indices;
     *ebo_size = new_triangle_count * 3;
 
@@ -2869,8 +2932,201 @@ ENCAS_API void Encas_LoadGeometryShell(Encas_Case *encase, u32 time_value_idx, f
     ENCAS_FREE(remap);
 
     Encas_DeleteFaceKeyMap(&m);
+    ENCAS_FREE(vertices);
     ENCAS_FREE(faces);
-    Encas_DeleteMeshArray(mesh);
+}
+
+ENCAS_API bool Encas_LoadVariableOnShell(Encas_Case *encase, Encas_MeshArray *mesh, char *variable_name, u32 time_value_idx, const u32 *vbo_orig_idx, u32 vbo_size, float **var_vbo_out) {
+    Encas_Str variable_name_str_view = { .buffer = variable_name, .len = strlen(variable_name) };
+    s32 variable_idx = -1;
+
+    // Check the variable name
+    for (u32 var_idx = 0; var_idx < encase->variable->len; ++var_idx) {
+        Encas_MutStr *var_name = &encase->variable->elems[var_idx]->description;
+        Encas_Str var_name_view = { .buffer = var_name->buffer, .len = var_name->len };
+
+        if (Encas_Str_Equals(var_name_view, variable_name_str_view)) {
+            variable_idx = var_idx;
+            break;
+        }
+    }
+
+    if (variable_idx == -1) {
+        Encas_Log(ENCAS_LOG_LEVEL_ERROR, "No variable with name: '%s' found!\n", variable_name);
+        return false;;
+    }
+
+    Encas_DescFile *variable = encase->variable->elems[variable_idx];
+
+    // TODO: Load variable data from FlatVariable
+
+    float **var_data = Encas_LoadVariableData(encase, time_value_idx, variable_idx);
+    if (var_data == NULL) {
+        Encas_Log(ENCAS_LOG_LEVEL_ERROR, "Could't load ensight gold variable!\n");
+        return false;
+    }
+
+    u32 dimension_count = (variable->type == ENCAS_VARIABLE_SCALAR_PER_ELEMENT
+                           || variable->type == ENCAS_VARIABLE_SCALAR_PER_NODE) ? 1 : 3;
+
+    // Flatten the variable matrix
+
+    u32 mesh_info_array_idx = time_value_idx;
+    if (time_value_idx > encase->geometry->model->num_of_files - 1)
+        mesh_info_array_idx = 0;
+
+    Encas_MeshInfo *mesh_info = &encase->geometry->model->mesh_info_array.elems[mesh_info_array_idx];
+
+    u64 vertices_size = 0;
+    u64 var_offset = 0;
+    for (u32 part_idx = 0; part_idx < mesh_info->len; ++part_idx) {
+        Encas_MeshInfoPart *part = mesh_info->parts + part_idx;
+        vertices_size += (u64)part->num_of_coords;
+    }
+
+    float *local_var_vbo_out = ENCAS_MALLOC(dimension_count * vbo_size * sizeof(float));
+    if (variable->type == ENCAS_VARIABLE_SCALAR_PER_NODE) {
+        float *vertex_data = (float *)ENCAS_MALLOC(vertices_size * sizeof(float));
+
+        for (u32 part_idx = 0; part_idx < mesh_info->len; ++part_idx) {
+            Encas_MeshInfoPart *part = mesh_info->parts + part_idx;
+            u64 num_of_coords = part->num_of_coords;
+
+            memcpy(vertex_data + var_offset, var_data[part_idx], num_of_coords * sizeof(float));
+            var_offset += num_of_coords;
+        }
+
+        for (u32 i = 0; i < vbo_size; ++i)
+            local_var_vbo_out[i] = vertex_data[vbo_orig_idx[i]];
+
+
+        ENCAS_FREE(vertex_data);
+    } else if (variable->type == ENCAS_VARIABLE_VECTOR_PER_NODE) {
+        float *vertex_data = (float *)ENCAS_MALLOC(3 * vertices_size * sizeof(float));
+
+        for (u32 part_idx = 0; part_idx < mesh_info->len; ++part_idx) {
+            Encas_MeshInfoPart *part = mesh_info->parts + part_idx;
+            u64 num_of_coords = part->num_of_coords;
+
+            memcpy(vertex_data + var_offset, var_data[part_idx], 3 * num_of_coords * sizeof(float));
+            var_offset += 3 * num_of_coords;
+        }
+
+        for (u32 i = 0; i < vbo_size; ++i) {
+            u32 idx = vbo_orig_idx[i];
+            local_var_vbo_out[i + vbo_size * 0] = vertex_data[idx + vertices_size * 0];
+            local_var_vbo_out[i + vbo_size * 1] = vertex_data[idx + vertices_size * 1];
+            local_var_vbo_out[i + vbo_size * 2] = vertex_data[idx + vertices_size * 2];
+        }
+
+        ENCAS_FREE(vertex_data);
+    } else {
+        // ENCAS_VARIABLE_SCALAR_PER_ELEMENT or ENCAS_VARIABLE_VECTOR_PER_ELEMENT
+        const u32 pool_size = dimension_count * vertices_size * sizeof(float) + vertices_size * sizeof(u32);
+        u8 *pool = (u8 *)ENCAS_MALLOC(pool_size);
+        float *node_values = (float *)pool;
+        u32 *node_counts = (u32 *)(pool + dimension_count * vertices_size * sizeof(float));
+
+        memset(pool, 0, pool_size);
+
+        u32 *coords_offset = (u32 *)ENCAS_MALLOC(mesh_info->len * sizeof(u32));
+        coords_offset[0] = 0;
+        for (u32 part_idx = 1; part_idx < mesh_info->len; ++part_idx)
+            coords_offset[part_idx] = coords_offset[part_idx - 1] + mesh_info->parts[part_idx - 1].num_of_coords;
+
+        if (variable->type == ENCAS_VARIABLE_SCALAR_PER_ELEMENT) {
+            for (u32 part_idx = 0; part_idx < mesh_info->len; ++part_idx) {
+                const float const *part_data = var_data[part_idx];
+                const Encas_Mesh const *mpart = mesh->elems[part_idx];
+
+                const Encas_MeshInfoPart const *mesh_part = &mesh_info->parts[part_idx];
+
+                for (u32 elem_idx = 0; elem_idx < mesh_part->len; ++elem_idx) {
+                    u32 vert_cnt = _get_elem_vert_count(mpart->elem_array[elem_idx].type);
+
+                    for (u32 cell_idx = 0; cell_idx < mesh_part->elem_sizes[elem_idx]; ++cell_idx) {
+                        const u32 val_idx = mesh_part->elem_offsets[elem_idx] + cell_idx;
+                        for (u32 node_idx = 0; node_idx < vert_cnt; ++node_idx) {
+                            u32 vert_idx = mpart->elem_vert_map_array[mpart->elem_array[elem_idx].elem_vert_map_entry + cell_idx * vert_cnt + node_idx];
+                            const u32 final_idx = vert_idx + coords_offset[part_idx];
+
+                            node_values[final_idx] += part_data[val_idx];
+                            ++node_counts[final_idx];
+                        }
+                    }
+                }
+
+            }
+
+            for (u32 i = 0; i < vertices_size; ++i) {
+                if (node_counts[i] > 0)
+                    node_values[i] /= node_counts[i];
+                else
+                    node_values[i] = 0.f;
+            }
+
+            for (u32 i = 0; i < vbo_size; ++i)
+                local_var_vbo_out[i] = node_values[vbo_orig_idx[i]];
+        } else {
+            for (u32 part_idx = 0; part_idx < mesh_info->len; ++part_idx) {
+                const float const *part_data = var_data[part_idx];
+                const Encas_MeshInfoPart const *mesh_part = &mesh_info->parts[part_idx];
+                const u32 num_of_total_cells = mesh_part->elem_offsets[mesh_part->len - 1] + mesh_part->elem_sizes[mesh_part->len - 1];
+
+                const Encas_Mesh const *mpart = mesh->elems[part_idx];
+
+
+                for (u32 elem_idx = 0; elem_idx < mesh_part->len; ++elem_idx) {
+                    u32 vert_cnt = _get_elem_vert_count(mpart->elem_array[elem_idx].type);
+
+                    for (u32 cell_idx = 0; cell_idx < mesh_part->elem_sizes[elem_idx]; ++cell_idx) {
+                        const u32 val_idx = mesh_part->elem_offsets[elem_idx] + cell_idx;
+                        for (u32 node_idx = 0; node_idx < vert_cnt; ++node_idx) {
+                            u32 vert_idx = mpart->elem_vert_map_array[mpart->elem_array[elem_idx].elem_vert_map_entry + cell_idx * vert_cnt + node_idx];
+                            const u32 final_idx = vert_idx + coords_offset[part_idx];
+
+                            node_values[final_idx + vertices_size * 0] += part_data[val_idx + num_of_total_cells * 0];
+                            node_values[final_idx + vertices_size * 1] += part_data[val_idx + num_of_total_cells * 1];
+                            node_values[final_idx + vertices_size * 2] += part_data[val_idx + num_of_total_cells * 2];
+                            ++node_counts[final_idx];
+                        }
+                    }
+                }
+
+            }
+
+            for (u32 i = 0; i < vertices_size; ++i) {
+                if (node_counts[i] > 0) {
+                    node_values[i + vertices_size * 0] /= node_counts[i];
+                    node_values[i + vertices_size * 1] /= node_counts[i];
+                    node_values[i + vertices_size * 2] /= node_counts[i];
+                }
+                else {
+                    node_values[i] = 0.f;
+                }
+            }
+
+            for (u32 i = 0; i < vbo_size; ++i) {
+                u32 idx = vbo_orig_idx[i];
+                local_var_vbo_out[i + vbo_size * 0] = node_values[idx + vertices_size * 0];
+                local_var_vbo_out[i + vbo_size * 1] = node_values[idx + vertices_size * 1];
+                local_var_vbo_out[i + vbo_size * 2] = node_values[idx + vertices_size * 2];
+            }
+
+        }
+
+
+        ENCAS_FREE(coords_offset);
+        ENCAS_FREE(pool);
+    }
+
+    for (u32 part_idx = 0; part_idx < mesh_info->len; ++part_idx)
+        ENCAS_FREE(var_data[part_idx]);
+
+    ENCAS_FREE(var_data);
+
+    *var_vbo_out = local_var_vbo_out;
+    return true;
 }
 
 ENCAS_API void Encas_DeleteFloatArrParts(float **data, u32 num_of_parts) {
@@ -3435,5 +3691,244 @@ ENCAS_API float **Encas_LoadVariableData(Encas_Case *encase, u32 time_value_idx,
     }
     return NULL;
 }
+
+// TODO: split every type to tetrahedrons
+ENCAS_API void Encas_MeshArray_To_FlatMesh(Encas_Case *encas, Encas_MeshArray *mesh, Encas_FlatMesh *flat, u32 time_idx, u32 variable_idx) {
+    u32 mesh_info_array_idx = time_idx;
+    if (time_idx > encas->geometry->model->num_of_files - 1)
+        mesh_info_array_idx = 0;
+
+    Encas_MeshInfo *mesh_info = &encas->geometry->model->mesh_info_array.elems[mesh_info_array_idx];
+
+    u64 vertices_size = 0, elem_vert_map_size = 0;
+    for (u32 part_idx = 0; part_idx < mesh_info->len; ++part_idx) {
+        Encas_MeshInfoPart *part = mesh_info->parts + part_idx;
+        vertices_size += (u64)part->num_of_coords;
+        elem_vert_map_size += part->elem_vert_map_array_size;
+    }
+
+    flat->vertices = (Encas_Vertex *)ENCAS_MALLOC(vertices_size * sizeof(Encas_Vertex));
+    flat->elem_vert_map = (u64 *)ENCAS_MALLOC(elem_vert_map_size * sizeof(u64));
+
+    flat->vertices_size = vertices_size;
+    flat->elem_vert_map_size = elem_vert_map_size;
+
+    u64 vert_offset = 0, elem_offset = 0;
+    for (u32 part_idx = 0; part_idx < mesh->len; ++part_idx) {
+        Encas_Mesh *mesh_part = mesh->elems[part_idx];
+        u64 elem_size = mesh_info->parts[part_idx].elem_vert_map_array_size;
+
+        for (u64 elem_idx = 0; elem_idx < elem_size; ++elem_idx) {
+            flat->elem_vert_map[elem_offset + elem_idx] = (u64)mesh_part->elem_vert_map_array[elem_idx] + vert_offset;
+        }
+        elem_offset += elem_size;
+
+        for (u64 vert_idx = 0; vert_idx < mesh_part->vert_array_size; ++vert_idx) {
+            Encas_Vertex *vs = flat->vertices + vert_offset + vert_idx;
+
+            vs->x = mesh_part->vert_array.x[vert_idx];
+            vs->y = mesh_part->vert_array.y[vert_idx];
+            vs->z = mesh_part->vert_array.z[vert_idx];
+        }
+
+        vert_offset += mesh_part->vert_array_size;
+    }
+
+    flat->num_variables = encas->variable->len;
+    flat->data = (float **)ENCAS_MALLOC(flat->num_variables * sizeof(float *));
+    flat->data_sizes = (u32 *)ENCAS_MALLOC(flat->num_variables * sizeof(u32));
+
+    for (u32 var_idx = 0; var_idx < flat->num_variables; ++var_idx) {
+
+        Encas_DescFile *variable = encas->variable->elems[var_idx];
+        u64 data_size;
+        u32 is_vector;
+
+        switch (variable->type) {
+            case ENCAS_VARIABLE_SCALAR_PER_ELEMENT:
+                data_size = elem_vert_map_size / 4;
+                is_vector = 0;
+                break;
+            case ENCAS_VARIABLE_VECTOR_PER_ELEMENT:
+                data_size = elem_vert_map_size / 4 * 3;
+                is_vector = 1;
+                break;
+            case ENCAS_VARIABLE_SCALAR_PER_NODE:
+                data_size = vertices_size;
+                is_vector = 0;
+                break;
+            case ENCAS_VARIABLE_VECTOR_PER_NODE:
+                data_size = vertices_size * 3;
+                is_vector = 1;
+                break;
+            default:
+                break;
+        }
+
+        flat->data_sizes[var_idx] = data_size;
+
+        float **var_data = Encas_LoadVariableData(encas, time_idx, var_idx);
+        if (var_data == NULL) {
+            Encas_Log(ENCAS_LOG_LEVEL_ERROR, "Could't load ensight gold variable!\n");
+            exit(EXIT_FAILURE);
+        }
+
+        u64 var_offset = 0;
+        flat->data[var_idx] = (float *)ENCAS_MALLOC(data_size * sizeof(float));
+
+        if (variable->type == ENCAS_VARIABLE_SCALAR_PER_NODE) {
+            for (u32 part_idx = 0; part_idx < mesh->len; ++part_idx) {
+                Encas_MeshInfoPart *part = mesh_info->parts + part_idx;
+                u64 num_of_coords = part->num_of_coords;
+
+                memcpy(flat->data[var_idx] + var_offset, var_data[part_idx], num_of_coords * sizeof(float));
+                var_offset += num_of_coords;
+            }
+        } else if (variable->type == ENCAS_VARIABLE_VECTOR_PER_NODE) { /* ENCAS_VARIABLE_VECTOR_PER_NODE */
+            for (u32 part_idx = 0; part_idx < mesh->len; ++part_idx) {
+                Encas_MeshInfoPart *part = mesh_info->parts + part_idx;
+                u64 num_of_coords = part->num_of_coords;
+
+                for (u64 i = 0; i < num_of_coords; ++i) {
+                    flat->data[var_idx][var_offset + 0] = var_data[part_idx][i + 0 * num_of_coords];
+                    flat->data[var_idx][var_offset + 1] = var_data[part_idx][i + 1 * num_of_coords];
+                    flat->data[var_idx][var_offset + 2] = var_data[part_idx][i + 2 * num_of_coords];
+
+                    var_offset += 3;
+                }
+            }
+        }
+
+        // Need to interpolate
+        else if (variable->type == ENCAS_VARIABLE_SCALAR_PER_ELEMENT) {
+            for (u32 part_idx = 0; part_idx < mesh->len; ++part_idx) {
+                Encas_MeshInfoPart *part = mesh_info->parts + part_idx;
+                u64 num_of_tetras = part->elem_vert_map_array_size / 4;
+
+                memcpy(flat->data[var_idx] + var_offset, var_data[part_idx], num_of_tetras * sizeof(float));
+                var_offset += num_of_tetras;
+            }
+        } else if (variable->type == ENCAS_VARIABLE_VECTOR_PER_ELEMENT) {
+            for (u32 part_idx = 0; part_idx < mesh->len; ++part_idx) {
+                Encas_MeshInfoPart *part = mesh_info->parts + part_idx;
+                u64 num_of_tetras = part->elem_vert_map_array_size / 4;
+
+                for (u64 i = 0; i < num_of_tetras; ++i) {
+                    flat->data[var_idx][var_offset + 0] = var_data[part_idx][i + 0 * num_of_tetras];
+                    flat->data[var_idx][var_offset + 1] = var_data[part_idx][i + 1 * num_of_tetras];
+                    flat->data[var_idx][var_offset + 2] = var_data[part_idx][i + 2 * num_of_tetras];
+
+                    var_offset += 3;
+                }
+            }
+        }
+
+        for (u32 part_idx = 0; part_idx < mesh->len; ++part_idx)
+            ENCAS_FREE(var_data[part_idx]);
+
+        ENCAS_FREE(var_data);
+    }
+}
+
+ENCAS_API void Encas_DeleteFlatMesh(Encas_FlatMesh *flat) {
+    ENCAS_FREE(flat->vertices);
+    ENCAS_FREE(flat->elem_vert_map);
+    ENCAS_FREE(flat->data_sizes);
+
+    for (u32 var_idx = 0; var_idx < flat->num_variables; ++var_idx)
+        ENCAS_FREE(flat->data[var_idx]);
+    ENCAS_FREE(flat->data);
+}
+
+// FNV-1a 64-bit hash
+static inline u64 hash_facekey(const Encas_FaceKey *key) {
+    const u8 *data = (const u8 *)key;
+    u64 hash = 14695981039346656037ULL;
+    for (u32 i = 0; i < sizeof(Encas_FaceKey); ++i) {
+        hash ^= data[i];
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+ENCAS_API bool Encas_EqualFaceKey(const Encas_FaceKey *a, const Encas_FaceKey *b) {
+    return memcmp(a, b, sizeof(Encas_FaceKey)) == 0;
+}
+
+ENCAS_API void Encas_CreateFaceKeyMap(Encas_FaceKeyMap *map, u32 cap) {
+    map->cap = cap;
+    map->len = 0;
+    map->keys = ENCAS_MALLOC(map->cap * sizeof(Encas_FaceKey));
+    memset(map->keys, 0, map->cap * sizeof(Encas_FaceKey));
+    map->values = ENCAS_MALLOC(map->cap * sizeof(u8));
+    memset(map->values, 0, map->cap * sizeof(u8));
+}
+
+ENCAS_API void Encas_DeleteFaceKeyMap(Encas_FaceKeyMap *map) {
+    ENCAS_FREE(map->keys);
+    ENCAS_FREE(map->values);
+    map->keys = NULL;
+    map->values = NULL;
+    map->cap = 0;
+    map->len = 0;
+}
+
+ENCAS_API void Encas_SetFaceKeyMap(Encas_FaceKeyMap *map, Encas_FaceKey key, u8 value) {
+    if ((float)map->len / map->cap >= LOAD_FACTOR) {
+        Encas_RehashFaceKeyMap(map, map->cap * 2);
+    }
+
+    u64 hash = hash_facekey(&key);
+    u32 index = hash % map->cap;
+
+    while (map->values[index] != 0) {
+        if (Encas_EqualFaceKey(&map->keys[index], &key)) {
+            map->values[index] = value;
+            return;
+        }
+        index = (index + 1) % map->cap;
+    }
+
+    map->keys[index] = key;
+    map->values[index] = value;
+    map->len++;
+}
+
+ENCAS_API bool Encas_GetFaceKeyMap(Encas_FaceKeyMap *map, Encas_FaceKey key, u8 *out_value) {
+    uint64_t hash = hash_facekey(&key);
+    uint32_t index = hash % map->cap;
+
+    while (map->values[index] != 0) {
+        if (Encas_EqualFaceKey(&map->keys[index], &key)) {
+            *out_value = map->values[index];
+            return true;
+        }
+        index = (index + 1) % map->cap;
+    }
+    return false;
+}
+
+ENCAS_API void Encas_RehashFaceKeyMap(Encas_FaceKeyMap *map, u32 new_cap) {
+    Encas_FaceKey *old_keys = map->keys;
+    u8 *old_values = map->values;
+    u32 old_cap = map->cap;
+
+    map->keys = ENCAS_MALLOC(new_cap * sizeof(Encas_FaceKey));
+    memset(map->keys, 0, new_cap * sizeof(Encas_FaceKey));
+    map->values = ENCAS_MALLOC(new_cap * sizeof(u8));
+    memset(map->values, 0, new_cap * sizeof(u8));
+    map->cap = new_cap;
+    map->len = 0;
+
+    for (u32 i = 0; i < old_cap; ++i) {
+        if (old_values[i] != 0) {
+            Encas_SetFaceKeyMap(map, old_keys[i], old_values[i]);
+        }
+    }
+
+    ENCAS_FREE(old_keys);
+    ENCAS_FREE(old_values);
+}
+
 #endif /* ENCAS_IMPLEMENTATION */
 #endif /* ENCAS_H */
