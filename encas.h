@@ -2612,11 +2612,15 @@ ENCAS_API Encas_MeshArray *Encas_LoadGeometry(Encas_Case *encase, u32 time_value
 
     if (!gelem->ts_set) {
         // load a single geometry file
-        memcpy(geo_filename + dirname_length + 1, gelem->filename.buffer, gelem->filename.len);
-        geo_filename[dirname_length + 1 + gelem->filename.len] = '\0';
-        mesh_info = &gelem->mesh_info_array.elems[0];
-        Encas_Log(ENCAS_LOG_LEVEL_INFO, "Geometry filename: %s\n", geo_filename);
-        return Encas_ReadGeometry(mesh_info, geo_filename);
+        if (encase->times != NULL && encase->times->len >= 1) {
+            gelem->ts = encase->times->elems[0]->time_set_number;
+        } else {
+            memcpy(geo_filename + dirname_length + 1, gelem->filename.buffer, gelem->filename.len);
+            geo_filename[dirname_length + 1 + gelem->filename.len] = '\0';
+            mesh_info = &gelem->mesh_info_array.elems[0];
+            Encas_Log(ENCAS_LOG_LEVEL_INFO, "Geometry filename: %s\n", geo_filename);
+            return Encas_ReadGeometry(mesh_info, geo_filename);
+        }
     }
 
     Encas_Time *time = NULL;
@@ -3611,59 +3615,58 @@ ENCAS_API float **Encas_LoadVariableData(Encas_Case *encase, u32 time_value_idx,
     filename_length += dirname_length + 1;
 
     if (!df->ts_set) {
-        memcpy(filename + filename_length, df->filename.buffer, df->filename.len);
-        filename[filename_length + df->filename.len] = '\0';
+        df->ts = encase->times->elems[0]->time_set_number;
     }
-    else {
-        Encas_Time *time = NULL;
 
+    Encas_Time *time = NULL;
+
+    if (encase->times != NULL)
         for (u32 time_idx = 0; time_idx < encase->times->len && time == NULL; ++time_idx)
             if (encase->times->elems[time_idx]->time_set_number == df->ts)
                 time = encase->times->elems[time_idx];
 
+
+    s32 asterisk_idx = Encas_MutStr_FindChar(&df->filename, '*');
+    if (asterisk_idx == -1) {
+        memcpy(filename + filename_length, df->filename.buffer, df->filename.len);
+        filename[filename_length + df->filename.len] = '\0';
+    } else {
         if (time == NULL) {
             Encas_Log(ENCAS_LOG_LEVEL_ERROR, "Encas_LoadVariableData: Time with 'time set number = %d' not found!\n", df->ts);
             return NULL;
         }
 
-        s32 asterisk_idx = Encas_MutStr_FindChar(&df->filename, '*');
-        if (asterisk_idx == -1) {
-            memcpy(filename + filename_length, df->filename.buffer, df->filename.len);
-            filename[filename_length + df->filename.len] = '\0';
+        u32 asterisk_count = 1;
+        for (u32 i = asterisk_idx + 1; i < df->filename.len && df->filename.buffer[i] == '*'; ++i)
+            ++asterisk_count;
+
+        u32 file_num = time->filename_start_number + time->filename_increment * time_value_idx;
+
+        // Copy the first part of the filename (before the asterisks)
+        memcpy(filename + filename_length, df->filename.buffer, asterisk_idx);
+
+        // Format the number with leading zeros based on asterisk count
+        char tmp[256];
+        snprintf(tmp, 256, "%0*d", asterisk_count, file_num);
+        u32 tmp_len = strlen(tmp);
+        if (tmp_len != asterisk_count) {
+            Encas_Log(ENCAS_LOG_LEVEL_ERROR, "Pattern '*' is shorter than the generated number!\n");
+            return NULL;
         }
-        else {
-            u32 asterisk_count = 1;
-            for (u32 i = asterisk_idx + 1; i < df->filename.len && df->filename.buffer[i] == '*'; ++i)
-                ++asterisk_count;
 
-            u32 file_num = time->filename_start_number + time->filename_increment * time_value_idx;
+        // Copy the formatted number
+        memcpy(filename + filename_length + asterisk_idx, tmp, tmp_len);
 
-            // Copy the first part of the filename (before the asterisks)
-            memcpy(filename + filename_length, df->filename.buffer, asterisk_idx);
-
-            // Format the number with leading zeros based on asterisk count
-            char tmp[256];
-            snprintf(tmp, 256, "%0*d", asterisk_count, file_num);
-            u32 tmp_len = strlen(tmp);
-            if (tmp_len != asterisk_count) {
-                Encas_Log(ENCAS_LOG_LEVEL_ERROR, "Pattern '*' is shorter than the generated number!\n");
-                return NULL;
-            }
-
-            // Copy the formatted number
-            memcpy(filename + filename_length + asterisk_idx, tmp, tmp_len);
-
-            // Copy the rest of the filename (after the asterisks)
-            u32 remaining_len = df->filename.len - (asterisk_idx + asterisk_count);
-            if (remaining_len > 0) {
-                memcpy(filename + filename_length + asterisk_idx + tmp_len,
-                       df->filename.buffer + asterisk_idx + asterisk_count,
-                       remaining_len);
-            }
-
-            // Null-terminate the filename
-            filename[filename_length + asterisk_idx + tmp_len + remaining_len] = '\0';
+        // Copy the rest of the filename (after the asterisks)
+        u32 remaining_len = df->filename.len - (asterisk_idx + asterisk_count);
+        if (remaining_len > 0) {
+            memcpy(filename + filename_length + asterisk_idx + tmp_len,
+                   df->filename.buffer + asterisk_idx + asterisk_count,
+                   remaining_len);
         }
+
+        // Null-terminate the filename
+        filename[filename_length + asterisk_idx + tmp_len + remaining_len] = '\0';
     }
 
     //printf("filename: %s\n", filename);
